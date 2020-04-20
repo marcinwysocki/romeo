@@ -7,3 +7,4 @@ erl_crash.dump
 /logs
 /config/ejabberd.yml
 /doc
+/.elixir_ls
