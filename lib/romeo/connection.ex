@@ -26,7 +26,8 @@ defmodule Romeo.Connection do
             stream_id: nil,
             timeout: nil,
             transport: nil,
-            reconnect: false
+            reconnect: false,
+            bind_iq_id: nil
 
   use Connection
 
@@ -133,6 +134,9 @@ defmodule Romeo.Connection do
 
   def handle_info(info, %{owner: owner, transport: transport} = conn) do
     case transport.handle_message(info, conn) do
+      {:ok, conn, :noreply} ->
+        {:noreply, conn}
+
       {:ok, conn, :more} ->
         {:noreply, conn}
 
