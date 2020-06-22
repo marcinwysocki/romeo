@@ -27,7 +27,8 @@ defmodule Romeo.Connection do
             timeout: nil,
             transport: nil,
             reconnect: false,
-            bind_iq_id: nil
+            bind_iq_id: nil,
+            session_iq_id: nil
 
   use Connection
 
