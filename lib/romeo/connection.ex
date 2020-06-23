@@ -29,7 +29,9 @@ defmodule Romeo.Connection do
             reconnect: false,
             bind_iq_id: nil,
             session_iq_id: nil,
-            initiator: nil
+            initiator: nil,
+            connected: false,
+            authenticated: false
 
   use Connection
 
@@ -94,13 +96,7 @@ defmodule Romeo.Connection do
   def connect(_, %Romeo.Connection{transport: transport, timeout: timeout} = conn) do
     case transport.connect(%{conn | initiator: self()}) do
       {:ok, conn} ->
-        receive do
-          {:transport_connected, new_conn} ->
-            {:ok, new_conn}
-        after
-          timeout ->
-            {:backoff, timeout, conn}
-        end
+        {:ok, conn}
 
       {:error, _} ->
         {:backoff, timeout, conn}
@@ -118,7 +114,16 @@ defmodule Romeo.Connection do
   end
 
   defp reset_connection(conn) do
-    %{conn | features: %Features{}, parser: nil, socket: nil}
+    %{
+      conn
+      | features: %Features{},
+        parser: nil,
+        socket: nil,
+        connected: false,
+        authenticated: false,
+        bind_iq_id: nil,
+        session_iq_id: nil
+    }
   end
 
   def handle_call(_, _, %{socket: nil} = conn) do
@@ -130,6 +135,14 @@ defmodule Romeo.Connection do
     {:reply, :ok, conn}
   end
 
+  def handle_cast({:send, data} = request, %{connected: false} = conn) do
+    Logger.warn("Wait for the open socket, dude: #{inspect(data)}")
+
+    :timer.apply_after(1000, GenServer, :cast, [self(), request])
+
+    {:noreply, conn}
+  end
+
   def handle_cast({:send, data}, %{transport: transport} = conn) do
     case transport.send(conn, data) do
       {:ok, conn} ->
@@ -138,6 +151,10 @@ defmodule Romeo.Connection do
       {:error, _} = error ->
         {:disconnect, error, conn}
     end
+  end
+
+  def handle_info({:transport_connected, new_conn}, _) do
+    {:noreply, %{new_conn | connected: true}}
   end
 
   def handle_info(info, %{owner: owner, transport: transport} = conn) do

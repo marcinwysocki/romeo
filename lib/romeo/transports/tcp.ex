@@ -2,10 +2,10 @@ defmodule Romeo.Transports.TCP do
   @moduledoc false
 
   @default_port 5222
-  @ssl_opts [reuse_sessions: true]
+  # @ssl_opts [reuse_sessions: true]
   @socket_opts [packet: :raw, mode: :binary, active: :once]
   @ns_jabber_client Romeo.XMLNS.ns_jabber_client()
-  @ns_component_accept Romeo.XMLNS.ns_component_accept()
+  # @ns_component_accept Romeo.XMLNS.ns_component_accept()
 
   @type state :: Romeo.Connection.t()
 
@@ -183,17 +183,32 @@ defmodule Romeo.Transports.TCP do
   ### STANZAS ###
 
   # session initialization
-  defp handle_stanza({:ok, conn, xmlstreamstart(attrs: attrs)}) do
+  defp handle_stanza({:ok, %{stream_id: nil} = conn, xmlstreamstart(attrs: attrs)}) do
     {"id", id} = List.keyfind(attrs, "id", 0)
 
     {:ok, %{conn | stream_id: id}, :noreply}
   end
 
-  defp handle_stanza({:ok, conn, xmlel(name: "stream:features") = stanza}) do
+  defp handle_stanza({:ok, %{stream_id: _} = conn, xmlstreamstart()}) do
+    {:ok, conn, :noreply}
+  end
+
+  defp handle_stanza(
+         {:ok, %{authenticated: false} = conn, xmlel(name: "stream:features") = stanza}
+       ) do
     new_conn =
       conn
       |> Map.put(:features, Features.parse_stream_features(stanza))
       |> authenticate()
+
+    {:ok, new_conn, :noreply}
+  end
+
+  defp handle_stanza({:ok, %{resource: ""} = conn, xmlel(name: "stream:features") = stanza}) do
+    new_conn =
+      conn
+      |> Map.put(:features, Features.parse_stream_features(stanza))
+      |> bind()
 
     {:ok, new_conn, :noreply}
   end
@@ -205,9 +220,8 @@ defmodule Romeo.Transports.TCP do
       conn
       |> reset_parser()
       |> start_stream()
-      |> bind()
 
-    {:ok, new_conn, :noreply}
+    {:ok, %{new_conn | authenticated: true}, :noreply}
   end
 
   defp handle_stanza({:ok, _, xmlel(name: "failure")}) do
@@ -238,9 +252,9 @@ defmodule Romeo.Transports.TCP do
             Logger.info(fn -> "Bound to resource: #{resource}" end)
             Kernel.send(owner, {:resource_bound, resource})
 
-            new_conn = %{conn | resource: resource}
-
-            session(new_conn)
+            new_conn =
+              %{conn | resource: resource}
+              |> session()
 
             {:ok, new_conn, :noreply}
 
