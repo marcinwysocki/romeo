@@ -28,7 +28,9 @@ defmodule Romeo.Connection do
             transport: nil,
             reconnect: false,
             bind_iq_id: nil,
-            session_iq_id: nil
+            session_iq_id: nil,
+            socket_server: nil,
+            initiator: nil
 
   use Connection
 
@@ -90,12 +92,18 @@ defmodule Romeo.Connection do
     {:connect, :init, conn}
   end
 
-  def connect(_, %{transport: transport, timeout: timeout} = conn) do
-    case transport.connect(conn) do
-      {:ok, conn} ->
-        {:ok, conn}
+  def connect(_, %Romeo.Connection{transport: transport, timeout: timeout} = conn) do
+    case transport.start_link(conn) do
+      {:ok, pid} ->
+        case transport.connect(%{conn | socket_server: pid}) do
+          {:ok, conn} ->
+            {:ok, conn}
 
-      {:error, _} ->
+          {:error, _} ->
+            {:backoff, timeout, conn}
+        end
+
+      _ ->
         {:backoff, timeout, conn}
     end
   end

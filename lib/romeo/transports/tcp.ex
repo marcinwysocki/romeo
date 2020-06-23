@@ -1,6 +1,8 @@
 defmodule Romeo.Transports.TCP do
   @moduledoc false
 
+  use GenServer
+
   @default_port 5222
   @ssl_opts [reuse_sessions: true]
   @socket_opts [packet: :raw, mode: :binary, active: :once]
@@ -18,8 +20,36 @@ defmodule Romeo.Transports.TCP do
 
   import Kernel, except: [send: 2]
 
-  @spec connect(Keyword.t()) :: {:ok, state} | {:error, any}
-  def connect(%Conn{host: host, port: port, socket_opts: socket_opts, legacy_tls: tls} = conn) do
+  def connect(%Conn{socket_server: server}) do
+    GenServer.call(server, :connect)
+  end
+
+  ### GenServer
+
+  def start_link(conn) do
+    GenServer.start_link(__MODULE__, conn)
+  end
+
+  def init(conn) do
+    {:ok, conn}
+  end
+
+  def handle_call(
+        :connect,
+        from,
+        conn
+      ) do
+    case do_connect(%{conn | initiator: from}) do
+      {:ok, new_conn} ->
+        {:noreply, new_conn}
+
+      err ->
+        {:stop, err, conn}
+    end
+  end
+
+  @spec do_connect(Keyword.t()) :: {:ok, state} | {:error, any}
+  def do_connect(%Conn{host: host, port: port, socket_opts: socket_opts} = conn) do
     host = (host || host(conn.jid)) |> to_charlist()
     port = port || @default_port
 
@@ -31,7 +61,10 @@ defmodule Romeo.Transports.TCP do
         parser = :fxml_stream.new(self(), :infinity, [:no_gen_server])
         conn = %{conn | parser: parser, socket: {:gen_tcp, socket}}
         # conn = if tls, do: upgrade_to_tls(conn), else: conn
-        start_protocol(conn)
+        case start_protocol(conn) do
+          %Conn{} = conn -> {:ok, conn}
+          err -> err
+        end
 
       {:error, _} = error ->
         error
@@ -137,10 +170,7 @@ defmodule Romeo.Transports.TCP do
   end
 
   defp authenticate(%Conn{} = conn) do
-    conn
-    |> Romeo.Auth.authenticate!()
-    |> reset_parser
-    |> start_stream
+    Romeo.Auth.authenticate!(conn)
   end
 
   # TODO: uses Tcp.receive/2 under the hood. Has to be reimplemented
@@ -194,14 +224,34 @@ defmodule Romeo.Transports.TCP do
       conn
       |> Map.put(:features, Features.parse_stream_features(stanza))
       |> authenticate()
+
+    {:ok, new_conn, :noreply}
+  end
+
+  defp handle_stanza({:ok, conn, xmlel(name: "success")}) do
+    Logger.info(fn -> "Authenticated successfully" end)
+
+    new_conn =
+      conn
+      |> reset_parser()
+      |> start_stream()
       |> bind()
 
     {:ok, new_conn, :noreply}
   end
 
+  defp handle_stanza({:ok, _, xmlel(name: "failure")}) do
+    raise Romeo.Auth.Error, ""
+  end
+
   defp handle_stanza(
-         {:ok, %Conn{owner: owner, bind_iq_id: bind_iq_id, session_iq_id: session_iq_id} = conn,
-          xmlel(name: "iq") = stanza}
+         {:ok,
+          %Conn{
+            owner: owner,
+            bind_iq_id: bind_iq_id,
+            session_iq_id: session_iq_id,
+            initiator: initiator
+          } = conn, xmlel(name: "iq") = stanza}
        )
        when not is_nil(bind_iq_id) do
     case Romeo.XML.attr(stanza, "type") do
@@ -228,6 +278,8 @@ defmodule Romeo.Transports.TCP do
             Logger.info(fn -> "Session established" end)
 
             {:ok, new_conn} = ready(conn)
+
+            GenServer.reply(initiator, {:ok, new_conn})
 
             {:ok, new_conn, :noreply}
 
