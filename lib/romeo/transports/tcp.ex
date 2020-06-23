@@ -1,8 +1,6 @@
 defmodule Romeo.Transports.TCP do
   @moduledoc false
 
-  use GenServer
-
   @default_port 5222
   @ssl_opts [reuse_sessions: true]
   @socket_opts [packet: :raw, mode: :binary, active: :once]
@@ -20,36 +18,8 @@ defmodule Romeo.Transports.TCP do
 
   import Kernel, except: [send: 2]
 
-  def connect(%Conn{socket_server: server}) do
-    GenServer.call(server, :connect)
-  end
-
-  ### GenServer
-
-  def start_link(conn) do
-    GenServer.start_link(__MODULE__, conn)
-  end
-
-  def init(conn) do
-    {:ok, conn}
-  end
-
-  def handle_call(
-        :connect,
-        from,
-        conn
-      ) do
-    case do_connect(%{conn | initiator: from}) do
-      {:ok, new_conn} ->
-        {:noreply, new_conn}
-
-      err ->
-        {:stop, err, conn}
-    end
-  end
-
-  @spec do_connect(Keyword.t()) :: {:ok, state} | {:error, any}
-  def do_connect(%Conn{host: host, port: port, socket_opts: socket_opts} = conn) do
+  @spec connect(Keyword.t()) :: {:ok, state} | {:error, any}
+  def connect(%Conn{host: host, port: port, socket_opts: socket_opts} = conn) do
     host = (host || host(conn.jid)) |> to_charlist()
     port = port || @default_port
 
@@ -279,7 +249,7 @@ defmodule Romeo.Transports.TCP do
 
             {:ok, new_conn} = ready(conn)
 
-            GenServer.reply(initiator, {:ok, new_conn})
+            Kernel.send(initiator, {:transport_connected, new_conn})
 
             {:ok, new_conn, :noreply}
 
